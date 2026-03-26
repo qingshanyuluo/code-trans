@@ -1,48 +1,87 @@
 """
-Dispatcher Agent — 搜索模式提取与文件定位工具
+Dispatcher Agent — LLM 驱动的智能文件定位
+
+优先级:
+  1. 使用 Planner 在计划中指定的目标文件 (target_files)
+  2. 调用 LLM 根据任务描述 + 文件摘要智能匹配
+  3. 兜底: 扫描项目全部源文件
 """
 
-import re
+import os
+
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
+
+from config import LLM_MODEL
+from utils.scanner import scan_project
+from prompts.dispatcher_prompt import (
+    DISPATCHER_SYSTEM_PROMPT,
+    DISPATCHER_USER_PROMPT_TEMPLATE,
+)
 
 
-TASK_SEARCH_PATTERNS = {
-    "print": r'\bprint\s+[^(]',
-    "print()": r'\bprint\s+[^(]',
-    "raw_input": r'\braw_input\s*\(',
-    "xrange": r'\bxrange\s*\(',
-    "unicode": r'\bunicode\s*\(',
-    "basestring": r'\bbasestring\b',
-    "has_key": r'\.has_key\s*\(',
-    "except": r'\bexcept\s+\w+\s*,\s*\w+',
-    "urllib2": r'\burllib2\b',
-    "StringIO": r'\b(StringIO|cStringIO)\b',
-    "iteritems": r'\.(iteritems|itervalues|iterkeys)\s*\(',
-    "long": r'\blong\s*\(',
-    "range": r'\bxrange\b',
-    "dict.items": r'\.(iteritems|itervalues|iterkeys)\b',
-}
+def create_dispatcher_llm() -> ChatOpenAI:
+    return ChatOpenAI(
+        model=LLM_MODEL,
+        temperature=0,
+        max_retries=3,
+        request_timeout=60,
+    )
 
 
-def extract_search_pattern(task_description: str) -> str:
+def resolve_target_files(project_path: str, relative_files: list[str]) -> list[str]:
+    """将 Planner 指定的相对路径解析为绝对路径，跳过不存在的文件。"""
+    resolved = []
+    for rel_path in relative_files:
+        abs_path = os.path.join(project_path, rel_path)
+        if os.path.isfile(abs_path):
+            resolved.append(abs_path)
+    return resolved
+
+
+def _build_file_summaries(project_path: str, all_files: list[str], max_lines: int = 15) -> str:
+    """为每个文件生成内容摘要（前 N 行），供 LLM 判断文件相关性。"""
+    summaries = []
+    for filepath in all_files:
+        rel_path = os.path.relpath(filepath, project_path)
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                head = ''.join(f.readline() for _ in range(max_lines))
+            summaries.append(f"### {rel_path}\n```\n{head.rstrip()}\n```")
+        except (IOError, OSError):
+            summaries.append(f"### {rel_path}\n```\n# [无法读取]\n```")
+    return "\n\n".join(summaries)
+
+
+def find_target_files_with_llm(task_description: str, project_path: str) -> list[str]:
     """
-    从任务描述中提取搜索模式。
-    优先使用预定义映射，否则尝试从描述中提取关键词。
+    使用 LLM 根据任务描述 + 文件摘要智能判断需要修改的文件。
+    当 Planner 未指定目标文件时调用。
     """
-    desc_lower = task_description.lower()
+    all_files = scan_project(project_path)
+    if not all_files:
+        return []
 
-    # 尝试匹配预定义的搜索模式
-    for keyword, pattern in TASK_SEARCH_PATTERNS.items():
-        if keyword.lower() in desc_lower:
-            return pattern
+    file_summaries = _build_file_summaries(project_path, all_files)
 
-    # 尝试从描述中提取引号包裹的模式
-    quoted = re.findall(r'[`"\'](.*?)[`"\']', task_description)
-    if quoted:
-        return re.escape(quoted[0])
+    llm = create_dispatcher_llm()
+    user_prompt = DISPATCHER_USER_PROMPT_TEMPLATE.format(
+        task_description=task_description,
+        file_summaries=file_summaries,
+    )
 
-    # 最后的回退: 使用描述中的第一个英文关键词
-    words = re.findall(r'[a-zA-Z_]\w+', task_description)
-    if words:
-        return r'\b' + re.escape(words[0]) + r'\b'
+    response = llm.invoke([
+        SystemMessage(content=DISPATCHER_SYSTEM_PROMPT),
+        HumanMessage(content=user_prompt),
+    ])
 
-    return r'.'
+    result_files = []
+    for line in response.content.strip().splitlines():
+        line = line.strip().lstrip('- ')
+        if not line:
+            continue
+        abs_path = os.path.join(project_path, line)
+        if os.path.isfile(abs_path):
+            result_files.append(abs_path)
+
+    return result_files

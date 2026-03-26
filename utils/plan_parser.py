@@ -16,6 +16,7 @@ class Task:
     status: str                 # "pending" | "in_progress" | "done" | "blocked"
     phase: str = ""             # 所属阶段名称
     line_number: int = 0        # 在文件中的行号（用于更新）
+    target_files: list = field(default_factory=list)  # Planner 指定的目标文件（相对路径）
 
 
 @dataclass
@@ -45,6 +46,7 @@ MARKER_TO_STATUS = {
 def parse_plan(plan_path: str) -> List[Phase]:
     """
     解析 MIGRATION_PLAN.md，返回结构化的阶段/任务列表。
+    支持任务下方的 `  - 文件: file1.py, file2.py` 子项。
     """
     if not os.path.exists(plan_path):
         return []
@@ -54,12 +56,13 @@ def parse_plan(plan_path: str) -> List[Phase]:
 
     phases = []
     current_phase = None
-    # 匹配阶段标题: ## 阶段 1：xxx  或 ## Phase 1: xxx
+    last_task = None
+
     phase_pattern = re.compile(r'^##\s+(.+)$')
-    # 匹配任务行: - [ ] 任务 1.1：xxx  或 - [x] 任务 1.1：xxx
     task_pattern = re.compile(
         r'^-\s+\[([ x/]|Blocked)\]\s+任务\s+(\d+\.\d+)[：:]\s*(.+)$'
     )
+    file_spec_pattern = re.compile(r'^\s+-\s+文件[：:]\s*(.+)$')
 
     for i, line in enumerate(lines):
         line_stripped = line.rstrip('\n')
@@ -68,6 +71,7 @@ def parse_plan(plan_path: str) -> List[Phase]:
         if phase_match:
             current_phase = Phase(name=phase_match.group(1).strip())
             phases.append(current_phase)
+            last_task = None
             continue
 
         task_match = task_pattern.match(line_stripped)
@@ -95,6 +99,16 @@ def parse_plan(plan_path: str) -> List[Phase]:
                 line_number=i,
             )
             current_phase.tasks.append(task)
+            last_task = task
+            continue
+
+        file_match = file_spec_pattern.match(line_stripped)
+        if file_match and last_task is not None:
+            files_str = file_match.group(1)
+            last_task.target_files = [
+                f.strip() for f in files_str.split(',') if f.strip()
+            ]
+            continue
 
     return phases
 

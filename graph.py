@@ -22,8 +22,8 @@ from utils.plan_parser import (
     get_next_pending_task,
     get_progress_summary,
 )
-from utils.scanner import grep_files_with_pattern, scan_project
-from agents.dispatcher import extract_search_pattern
+from utils.scanner import scan_project
+from agents.dispatcher import resolve_target_files, find_target_files_with_llm
 
 
 # ============================================================
@@ -101,13 +101,25 @@ def dispatcher_node(state: PipelineState) -> dict:
     print(f"\n📋 [Dispatcher] 新任务: {task.id} — {task.description}")
     update_task_status(plan_path, task.id, "in_progress")
 
-    # 定位文件
-    pattern = extract_search_pattern(task.description)
-    print(f"🔎 [Dispatcher] 搜索模式: {pattern}")
+    # 三级文件定位策略
+    matching_files = []
 
-    matching_files = grep_files_with_pattern(project_path, pattern)
+    # 1) Planner 指定的目标文件（优先级最高）
+    if task.target_files:
+        matching_files = resolve_target_files(project_path, task.target_files)
+        if matching_files:
+            print(f"📂 [Dispatcher] 使用 Planner 指定的目标文件:")
+        else:
+            print(f"⚠️  [Dispatcher] Planner 指定的文件不存在: {task.target_files}")
+
+    # 2) LLM 智能匹配（Planner 未指定或文件不存在时）
     if not matching_files:
-        print("⚠️  未找到匹配文件，扫描所有 Python 文件")
+        print(f"🤖 [Dispatcher] 调用 LLM 智能匹配目标文件...")
+        matching_files = find_target_files_with_llm(task.description, project_path)
+
+    # 3) 兜底: 扫描全部源文件
+    if not matching_files:
+        print("⚠️  [Dispatcher] LLM 未匹配到文件，扫描所有源文件")
         matching_files = scan_project(project_path)
 
     print(f"📂 [Dispatcher] 找到 {len(matching_files)} 个相关文件:")

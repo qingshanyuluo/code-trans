@@ -23,7 +23,16 @@ MAX_RETRY_COUNT = int(os.getenv("MAX_RETRY_COUNT", "3"))
 # ============================================================
 MIGRATION_PLAN_FILENAME = "MIGRATION_PLAN.md"
 BACKUP_SUFFIX = ".bak"
-SUPPORTED_EXTENSIONS = [".py"]
+SUPPORTED_EXTENSIONS = [
+    ".py",
+    ".js", ".ts", ".jsx", ".tsx",
+    ".vue", ".svelte",
+    ".java", ".kt",
+    ".go", ".rs",
+    ".rb", ".php",
+    ".css", ".scss", ".less",
+    ".html",
+]
 
 # ============================================================
 # 验证配置

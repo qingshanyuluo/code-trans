@@ -12,8 +12,11 @@ def scan_project(project_path: str) -> list[str]:
     """递归获取项目中所有支持的源文件路径列表"""
     files = []
     for root, _dirs, filenames in os.walk(project_path):
-        # 跳过隐藏目录和常见非代码目录
-        _dirs[:] = [d for d in _dirs if not d.startswith('.') and d not in ('__pycache__', '.venv', 'venv', 'node_modules')]
+        _dirs[:] = [
+            d for d in _dirs
+            if not d.startswith('.')
+            and d not in ('__pycache__', '.venv', 'venv', 'node_modules', 'dist', 'build')
+        ]
         for fname in filenames:
             if any(fname.endswith(ext) for ext in SUPPORTED_EXTENSIONS):
                 files.append(os.path.join(root, fname))
@@ -65,11 +68,16 @@ def get_project_summary(project_path: str) -> str:
     files = scan_project(project_path)
     lines = []
     lines.append(f"## 项目路径: {project_path}")
-    lines.append(f"## Python 源文件数量: {len(files)}")
+    lines.append(f"## 源文件数量: {len(files)}")
     lines.append("")
 
     # 检查依赖文件
-    for dep_file in ["requirements.txt", "setup.py", "pyproject.toml", "Pipfile"]:
+    dep_candidates = [
+        "requirements.txt", "setup.py", "pyproject.toml", "Pipfile",
+        "package.json", "pom.xml", "build.gradle", "Cargo.toml", "go.mod",
+        "Gemfile", "composer.json",
+    ]
+    for dep_file in dep_candidates:
         dep_path = os.path.join(project_path, dep_file)
         if os.path.exists(dep_path):
             lines.append(f"### 依赖文件: {dep_file}")
@@ -79,18 +87,26 @@ def get_project_summary(project_path: str) -> str:
             lines.append("```")
             lines.append("")
 
-    # 各文件概要
+    _EXT_LANG = {
+        ".py": "python", ".js": "javascript", ".ts": "typescript",
+        ".jsx": "jsx", ".tsx": "tsx", ".vue": "vue", ".svelte": "svelte",
+        ".java": "java", ".kt": "kotlin", ".go": "go", ".rs": "rust",
+        ".rb": "ruby", ".php": "php", ".css": "css", ".scss": "scss",
+        ".less": "less", ".html": "html", ".json": "json",
+    }
+
     lines.append("### 文件列表与内容预览")
     for filepath in files:
         rel_path = os.path.relpath(filepath, project_path)
+        ext = os.path.splitext(filepath)[1].lower()
+        lang = _EXT_LANG.get(ext, "")
         lines.append(f"\n#### {rel_path}")
-        lines.append("```python")
+        lines.append(f"```{lang}")
         try:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-                lines.append(content)
+                lines.append(f.read())
         except (IOError, OSError):
-            lines.append("# [无法读取]")
+            lines.append("// [无法读取]")
         lines.append("```")
 
     return "\n".join(lines)
